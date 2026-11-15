@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Casino Stats</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { background-color: #0b0f19; color: #f8fafc; font-family: 'Inter', sans-serif; }
+        .glass { background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); }
+        .glow-green { color: #10b981; text-shadow: 0 0 10px rgba(16, 185, 129, 0.5); }
+        .glow-red { color: #ef4444; text-shadow: 0 0 10px rgba(239, 68, 68, 0.5); }
+        .highroller { background: linear-gradient(90deg, rgba(139, 92, 246, 0.15) 0%, rgba(15, 23, 42, 0.5) 100%); border-left: 3px solid #8b5cf6; }
+        .scrollbar::-webkit-scrollbar { width: 6px; }
+        .scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-8">
+    <header class="flex items-center justify-between mb-8">
+        <div class="flex items-center gap-3">
+            <div class="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
+            <h1 class="text-2xl font-bold tracking-tight">Live Casino Stats</h1>
+        </div>
+        <div class="text-sm text-slate-400" id="connection-status">Connecting...</div>
+    </header>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div class="glass p-6 rounded-xl flex flex-col gap-2">
+            <span class="text-sm text-slate-400 font-medium">Total Wagered</span>
+            <span class="text-3xl font-bold text-white" id="total-wagered">0.0000</span>
+        </div>
+        <div class="glass p-6 rounded-xl flex flex-col gap-2">
+            <span class="text-sm text-slate-400 font-medium">Total Paid Out</span>
+            <span class="text-3xl font-bold text-white" id="total-paid">0.0000</span>
+        </div>
+        <div class="glass p-6 rounded-xl flex flex-col gap-2">
+            <span class="text-sm text-slate-400 font-medium">Total Bets</span>
+            <span class="text-3xl font-bold text-white" id="total-bets">0</span>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="glass p-6 rounded-xl lg:col-span-2 flex flex-col h-[600px]">
+            <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                <span class="relative flex h-3 w-3">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
+                </span>
+                Live Bet Feed
+            </h2>
+            <div class="flex-1 overflow-y-auto scrollbar pr-2">
+                <table class="w-full text-sm">
+                    <thead class="text-xs text-slate-400 text-left sticky top-0 bg-[#0f172a] pb-2">
+                        <tr>
+                            <th class="p-2">Game</th>
+                            <th class="p-2">Player</th>
+                            <th class="p-2 text-right">Bet</th>
+                            <th class="p-2 text-right">Payout</th>
+                        </tr>
+                    </thead>
+                    <tbody id="bet-feed"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="glass p-6 rounded-xl flex flex-col h-[600px]">
+            <h2 class="text-lg font-semibold mb-4">Live Volume by Game</h2>
+            <div class="flex-1 relative">
+                <canvas id="gameChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const connectionStatus = document.getElementById('connection-status');
+        let totalWagered = 0;
+        let totalPaid = 0;
+        let totalBets = 0;
+        const gameVolume = {};
+
+        const ctx = document.getElementById('gameChart').getContext('2d');
+        const gameChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Volume ($)',
+                    data: [],
+                    backgroundColor: 'rgba(139, 92, 246, 0.8)',
+                    borderColor: 'rgba(139, 92, 246, 1)',
+                    borderWidth: 1,
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, grid: { color: 'rgba(255,255,255, 0.05)' }, ticks: { color: '#94a3b8' } },
+                    x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+                }
+            }
+        });
+
+        socket.on('connect', () => {
+            connectionStatus.innerText = 'Connected - Live';
+            connectionStatus.className = 'text-sm text-green-400 font-bold';
+        });
+
+        socket.on('disconnect', () => {
+            connectionStatus.innerText = 'Disconnected';
+            connectionStatus.className = 'text-sm text-slate-400';
+        });
+
+        socket.on('new_bet', (bet) => {
+            totalWagered += bet.amount;
+            totalPaid += bet.payout;
+            totalBets += 1;
+            document.getElementById('total-wagered').innerText = totalWagered.toFixed(4);
+            document.getElementById('total-paid').innerText = totalPaid.toFixed(4);
+            document.getElementById('total-bets').innerText = totalBets;
+
+            gameVolume[bet.game_name] = (gameVolume[bet.game_name] || 0) + bet.amount;
+            gameChart.data.labels = Object.keys(gameVolume);
+            gameChart.data.datasets[0].data = Object.values(gameVolume);
+            gameChart.update();
+
+            const tbody = document.getElementById('bet-feed');
+            const tr = document.createElement('tr');
+            tr.className = `border-b border-slate-800 ${bet.is_highroller ? 'highroller' : ''}`;
+            
+            const profit = bet.payout - bet.amount;
+            const profitClass = profit > 0 ? 'glow-green' : 'glow-red';
+            const highRollerIcon = bet.is_highroller ? '<br><span class="text-xs text-purple-400">👑 High Roller</span>' : '';
+
+            tr.innerHTML = `
+                <td class="p-2 font-medium">${bet.game_name}</td>
+                <td class="p-2 text-slate-400">${bet.player_id}${highRollerIcon}</td>
+                <td class="p-2 text-right font-mono">${bet.amount.toFixed(4)} ${bet.currency}</td>
+                <td class="p-2 text-right font-mono ${profitClass}">${bet.payout.toFixed(4)}</td>
+            `;
+
+            tbody.prepend(tr);
+            if (tbody.children.length > 50) {
+                tbody.removeChild(tbody.lastChild);
+            }
+        });
+    </script>
+</body>
+</html>
